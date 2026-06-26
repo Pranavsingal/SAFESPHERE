@@ -1,0 +1,67 @@
+version: '3.8'
+
+services:
+  # MongoDB for real-time sensor streams
+  db-mongo:
+    image: mongo:6.0
+    container_name: safesphere-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    networks:
+      - safesphere-network
+
+  # MySQL for structured logs (workers, alerts, incidents)
+  db-mysql:
+    image: mysql:8.0
+    container_name: safesphere-mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: safesphere_password
+      MYSQL_DATABASE: safesphere
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    networks:
+      - safesphere-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-psafesphere_password"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Node.js backend API server
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: safesphere-backend
+    ports:
+      - "5000:5000"
+    environment:
+      - PORT=5000
+      - MONGO_URI=mongodb://db-mongo:27017/safesphere
+      - DB_HOST=db-mysql
+      - DB_USER=root
+      - DB_PASSWORD=safesphere_password
+      - DB_NAME=safesphere
+      - DB_PORT=3306
+      - JWT_SECRET=safesphere_jwt_secret_key
+      - ML_SERVICE_URL=http://host.docker.internal:5001/predict # Hook into host ML service
+    depends_on:
+      db-mysql:
+        condition: service_healthy
+      db-mongo:
+        condition: service_started
+    networks:
+      - safesphere-network
+
+volumes:
+  mongo-data:
+  mysql-data:
+
+networks:
+  safesphere-network:
+    driver: bridge
