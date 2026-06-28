@@ -1,27 +1,32 @@
 """
-SafeSphere - ML Microservice (Phase 2, Member 2)
-==================================================
-UPDATED: now uses Ankit's (M1) real trained models instead of
-placeholder rules.
+SafeSphere - ML Microservice (Phase 2 + Phase 3, Member 2)
+=============================================================
+UPDATED (Phase 3): now uses Ankit's (M1) real RiskEngine for the
+composite score, instead of the simpler hand-built formula from
+Phase 2. The Phase 2 formula is gone — RiskEngine replaces it
+entirely, since it does the same job better (it already solves
+the "one severe signal should dominate" problem via multipliers,
+which is exactly what we patched manually back in Phase 2).
 
 This Flask server is the "translator" between:
-  - M1's machine learning models (fall_detector, hr_anomaly, temp_alert)
+  - M1's machine learning models (fall, hr, temp, risk_engine)
   - M3's Node.js backend (which calls this service over HTTP)
-
-WHY THIS EXISTS:
-Node.js can't run Python ML models directly. So this server wraps
-the ML logic and exposes it as a simple web API. The Node.js backend
-sends sensor data here, this service returns a prediction.
 
 MODELS USED (all written by M1 / Ankit):
   - models/fall_detector.py   -> FallDetector class
   - models/hr_anomaly.py      -> HRAnomalyDetector class
   - models/temp_alert.py      -> TempAlertModel class
+  - models/risk_engine.py     -> RiskEngine class (NEW, Phase 3)
 
-Each class loads its own trained .joblib file and exposes a
-.predict(...) method that already returns a rich dictionary
-(prediction + confidence/score). This file just calls those
-methods and combines the three results into one response.
+FATIGUE NOTE: RiskEngine.calculate_risk() also accepts fatigue_data,
+but Ankit's FatiguePredictor needs a history of past readings (a
+pandas DataFrame), not a single live reading — and its own ML models
+are untrained (is_rf_trained/is_lstm_trained = False), so there's no
+real fatigue prediction to plug in yet. We pass a safe LOW placeholder
+for now (matching RiskEngine's own default), and will wire in the
+real FatiguePredictor once Ankit finishes training it and the
+history-tracking story is sorted out. This is intentional, not an
+oversight — see /predict route comments for the exact spot to change.
 """
 
 import os
@@ -31,6 +36,7 @@ from flask_cors import CORS
 from models.fall_detector import FallDetector
 from models.hr_anomaly import HRAnomalyDetector
 from models.temp_alert import TempAlertModel
+from models.risk_engine import RiskEngine
 
 app = Flask(__name__)
 CORS(app)  # allows the React frontend / Node backend to call this API
@@ -49,59 +55,19 @@ hr_model = HRAnomalyDetector()
 hr_model.load_model(os.path.join(MODELS_DIR, "hr_anomaly.joblib"))
 
 # TempAlertModel is rule-based (is_trained=True by default per Ankit's
-# code), so there's no real .joblib needed for predictions to work,
-# but we keep the line here in case M1 swaps in a trained version later.
+# code), so there's no real .joblib needed for predictions to work.
 temp_model = TempAlertModel()
 
+# RiskEngine: loads its trained gradient-boosting model if available,
+# otherwise falls back to its own sensible weighted-rules formula
+# (is_trained=False by default — that's fine, the rule-based path
+# already handles severity correctly via weights + multipliers).
+risk_engine = RiskEngine()
+risk_engine_path = os.path.join(MODELS_DIR, "risk_engine.joblib")
+risk_engine.load_model(risk_engine_path)
+
 print("All models loaded. ML microservice ready.")
-
-
-# -------------------------------------------------------------------
-# COMPOSITE RISK SCORE
-# Combines all three model outputs into one overall score (0-100)
-# + level. This is what Node.js's GET /risk-score endpoint calls.
-# -------------------------------------------------------------------
-def calculate_risk_score(fall_result, hr_result, temp_result):
-    """
-    Combines all three model outputs into one overall score (0-100)
-    + level.
-
-    DESIGN NOTE (fixed after testing): each signal's contribution is
-    now scaled so a maximum-severity reading from ANY single model
-    can push the overall result into HIGH on its own. The original
-    version capped temperature's contribution at 20% of its own
-    100-point scale, meaning even a heat-stroke-level reading
-    (temp risk_score=98) could never push the composite past MEDIUM.
-    That's wrong: a single model screaming "HIGH" should mean HIGH
-    overall, not get diluted by averaging with calmer signals.
-    """
-    fall_score = 50 if fall_result["prediction"] == "FALL" else 0
-    fall_score *= fall_result["confidence"]
-
-    hr_score = 50 if hr_result["prediction"] == "ANOMALY" else 0
-    hr_score *= hr_result["anomaly_score"]
-
-    # temp_result["risk_score"] is already 0-100 from Ankit's model;
-    # rescale it onto the same 0-50 contribution scale as the others
-    temp_score = (temp_result["risk_score"] / 100) * 50
-
-    # Take the MAX of the three (worst signal wins) blended with a
-    # smaller average-based component, so one severe signal alone
-    # is enough to flag HIGH, but multiple moderate signals still
-    # add up too.
-    worst = max(fall_score, hr_score, temp_score)
-    average = (fall_score + hr_score + temp_score) / 3
-
-    score = round(min(100, worst + average * 0.3), 1)
-
-    if score >= 50:
-        level = "HIGH"
-    elif score >= 20:
-        level = "MEDIUM"
-    else:
-        level = "LOW"
-
-    return {"score": score, "level": level}
+print(f"RiskEngine using {'trained ML model' if risk_engine.is_trained else 'rule-based weighted formula'}.")
 
 
 # ===================================================================
@@ -111,13 +77,15 @@ def calculate_risk_score(fall_result, hr_result, temp_result):
 @app.route("/", methods=["GET"])
 def health_check():
     """Visit http://localhost:5001/ in your browser to confirm the
-    server (and all 3 models) loaded correctly."""
+    server (and all models) loaded correctly."""
     return jsonify({
         "status": "SafeSphere ML microservice is running",
         "models_loaded": {
             "fall_detector": fall_model.is_trained,
             "hr_anomaly": hr_model.is_trained,
-            "temp_alert": temp_model.is_trained
+            "temp_alert": temp_model.is_trained,
+            "risk_engine": True,
+            "risk_engine_uses_ml": risk_engine.is_trained
         }
     })
 
@@ -134,16 +102,25 @@ def predict():
         "bpm": 142,
         "body_temp": 38.5,
         "env_temp": 32.0,
-        "humidity": 55
+        "humidity": 55,
+        "zone_hazard": 1.2,
+        "sos_pressed": false
     }
 
     Example response:
     {
         "worker_id": 1,
-        "fall": {"prediction": "SAFE", "confidence": 0.0, ...},
-        "heart_rate": {"prediction": "ANOMALY", "z_score": 3.4, ...},
-        "temperature": {"level": "MEDIUM", "risk_score": 62.0, ...},
-        "risk_score": {"score": 40.2, "level": "MEDIUM"}
+        "fall": {...}, "heart_rate": {...}, "temperature": {...},
+        "risk_score": {
+            "composite_score": 62.4,
+            "risk_level": "HIGH",
+            "components": {
+                "fall_contribution": 0,
+                "hr_contribution": 51.2,
+                "heat_contribution": 98.0,
+                "fatigue_contribution": 10
+            }
+        }
     }
     """
     data = request.get_json()
@@ -166,17 +143,42 @@ def predict():
     env_temp = data.get("env_temp", 25.0)
     humidity = data.get("humidity", 50.0)
 
+    # New for Phase 3 / RiskEngine:
+    # zone_hazard is a multiplier (1.0 = normal zone, >1.0 = a zone
+    # the team has flagged as inherently more dangerous, e.g. near
+    # heavy machinery). Defaults to 1.0 (no extra hazard) until the
+    # team defines real per-zone hazard values.
+    zone_hazard = data.get("zone_hazard", 1.0)
+    sos_pressed = data.get("sos_pressed", False)
+
     fall_result = fall_model.predict(ax, ay, az)
     hr_result = hr_model.predict(bpm)
     temp_result = temp_model.predict(body_temp, env_temp, humidity)
 
-    risk = calculate_risk_score(fall_result, hr_result, temp_result)
+    # TODO: REPLACE WITH REAL FATIGUE PREDICTION
+    # Once Ankit's FatiguePredictor is trained AND we have a way to
+    # track each worker's reading history over time, swap this for:
+    #   fatigue_result = fatigue_model.predict(worker_history_df)
+    # For now, LOW is a safe, honest placeholder — it matches
+    # RiskEngine's own default and doesn't fabricate a fatigue
+    # reading we have no real basis for.
+    fatigue_result = {"fatigue_level": "LOW"}
+
+    risk = risk_engine.calculate_risk(
+        fall_data=fall_result,
+        hr_data=hr_result,
+        temp_data=temp_result,
+        fatigue_data=fatigue_result,
+        zone_hazard=zone_hazard,
+        sos_active=sos_pressed
+    )
 
     return jsonify({
         "worker_id": worker_id,
         "fall": fall_result,
         "heart_rate": hr_result,
         "temperature": temp_result,
+        "fatigue": fatigue_result,
         "risk_score": risk
     })
 
@@ -194,19 +196,32 @@ def risk_score():
     body_temp = float(request.args.get("body_temp", 37.0))
     env_temp = float(request.args.get("env_temp", 25.0))
     humidity = float(request.args.get("humidity", 50.0))
-    # Same fix as /predict: default to 0, not 9.8 resting gravity,
-    # to avoid falsely triggering FALL on every request. See note above.
     ax = float(request.args.get("ax", 0))
     ay = float(request.args.get("ay", 0))
     az = float(request.args.get("az", 0))
+    zone_hazard = float(request.args.get("zone_hazard", 1.0))
+    sos_pressed = request.args.get("sos_pressed", "false").lower() == "true"
 
     fall_result = fall_model.predict(ax, ay, az)
     hr_result = hr_model.predict(bpm)
     temp_result = temp_model.predict(body_temp, env_temp, humidity)
+    fatigue_result = {"fatigue_level": "LOW"}
 
-    risk = calculate_risk_score(fall_result, hr_result, temp_result)
+    risk = risk_engine.calculate_risk(
+        fall_data=fall_result,
+        hr_data=hr_result,
+        temp_data=temp_result,
+        fatigue_data=fatigue_result,
+        zone_hazard=zone_hazard,
+        sos_active=sos_pressed
+    )
 
-    return jsonify(risk)
+    # Keep the response shape consistent with what the plan's
+    # milestone expects: {score, level}
+    return jsonify({
+        "score": risk["composite_score"],
+        "level": risk["risk_level"]
+    })
 
 
 if __name__ == "__main__":
