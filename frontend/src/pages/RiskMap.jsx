@@ -92,8 +92,15 @@ Pulls real worker + alert data and builds the zone summary RiskMap
 needs. Replaces the old fetchZoneRiskData() placeholder entirely.
 */
 async function fetchZoneRiskData(token) {
+  // NOTE: M3's docs list /api/workers under "Protected - JWT Required"
+  // already, but an earlier version of this file mistakenly called it
+  // without a token (based on inconsistent behavior seen during manual
+  // curl testing). It returned a 401 in the browser — adding the same
+  // Authorization header used for /api/alerts fixes it.
   const [workersRes, alertsRes] = await Promise.all([
-    axios.get(`${API_BASE}/workers`),
+    axios.get(`${API_BASE}/workers`, {
+      headers: { Authorization: `Bearer ${token}` }
+    }),
     axios.get(`${API_BASE}/alerts`, {
       headers: { Authorization: `Bearer ${token}` },
       params: { resolved: false }
