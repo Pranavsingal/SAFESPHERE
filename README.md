@@ -140,6 +140,14 @@ If you'd rather run the database servers manually or externally:
 
 All endpoints are prefixed with `/api`.
 
+### 📖 Interactive Swagger API Documentation
+
+SafeSphere includes interactive API documentation powered by Swagger UI:
+*   **Swagger UI Endpoint**: `http://localhost:5000/api-docs`
+*   **Raw OpenAPI Specification**: `http://localhost:5000/api-docs.json`
+
+This interface allows you to view and test all endpoints (Authentication, Workers, Sensor Ingestion, Alerts, Reports) directly from your browser. For protected endpoints, click the **"Authorize"** button at the top right of the Swagger UI and enter your supervisor JWT Bearer token in the format `Bearer <token>`.
+
 ### 🔑 Authentication (Public)
 - **`POST /api/auth/register`**: Registers a supervisor account.
   - **Body**: `{ "name": "John", "username": "admin", "password": "password123" }`
@@ -147,24 +155,16 @@ All endpoints are prefixed with `/api`.
   - **Body**: `{ "username": "admin", "password": "password123" }`
   - **Response**: `{ "success": true, "data": { "token": "JWT_STRING", ... } }`
 
-<<<<<<< HEAD
-### 👥 Workers Profiles (Protected - JWT Required)
-=======
 ### 👥 Workers Profiles (Protected — JWT Required)
 > **Note:** despite earlier docs suggesting otherwise, `GET /api/workers` requires the `Authorization: Bearer <token>` header in practice — confirmed during frontend integration testing.
 
->>>>>>> origin/Ankit
 - **`GET /api/workers`**: Fetch all registered worker profiles.
 - **`POST /api/workers`**: Registers a new worker in MySQL.
   - **Body**: `{ "id": "W-005", "name": "Bob", "role": "Scaffolder" }`
 - **`PUT /api/workers/:id`**: Update worker info (name, role, or active status).
 - **`DELETE /api/workers/:id`**: Deletes a worker profile.
 
-<<<<<<< HEAD
-### 📥 Telemetry Ingestion (Public - For Sensor Simulators)
-=======
 ### 📥 Telemetry Ingestion (Public — For Sensor Simulators)
->>>>>>> origin/Ankit
 - **`POST /api/sensor-data`**: Submits telemetry readings from wearable devices.
   - **Body**:
     ```json
