@@ -312,18 +312,10 @@ router.post('/auth/login', loginSupervisor);
  *       500:
  *         description: Server error
  */
-=======
-// --- Auth Routes ---
-router.post('/auth/register', registerSupervisor);
-router.post('/auth/login', loginSupervisor);
-
-// --- Workers CRUD (Protected) ---
->>>>>>> origin/Ankit
 router.route('/workers')
   .get(protect, getWorkers)
   .post(protect, createWorker);
 
-<<<<<<< HEAD
 /**
  * @openapi
  * /api/workers/{id}:
@@ -403,14 +395,11 @@ router.route('/workers')
  *       500:
  *         description: Server error
  */
-=======
->>>>>>> origin/Ankit
 router.route('/workers/:id')
   .put(protect, updateWorker)
   .delete(protect, deleteWorker);
 
 // --- Sensor Telemetry Ingestion (Public - Simulated Devices) ---
-<<<<<<< HEAD
 
 /**
  * @openapi
@@ -447,8 +436,6 @@ router.route('/workers/:id')
  *       500:
  *         description: Server error
  */
-=======
->>>>>>> origin/Ankit
 router.post(
   '/sensor-data',
   [
@@ -465,7 +452,6 @@ router.post(
 );
 
 // --- Alerts / Incidents Routes (Protected) ---
-<<<<<<< HEAD
 
 /**
  * @openapi
