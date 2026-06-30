@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const apiRoutes = require('./routes/api');
+const setupSwagger = require('./config/swagger');
 
 const app = express();
 
@@ -26,6 +27,9 @@ app.get('/health', (req, res) => {
     message: 'SafeSphere API server is running and healthy'
   });
 });
+
+// Initialize Swagger docs
+setupSwagger(app);
 
 // Hook up API routes
 app.use('/api', apiRoutes);
